@@ -75,8 +75,7 @@ Panel {
   readonly property bool hasAsus: stats.hasAsus === true
   readonly property bool hasChargeLimit: hasAsus && stats.batteryLimit !== undefined && stats.batteryLimit !== null
   readonly property bool boostOn: !!gpu && gpu.limit > gpu.defaultLimit + 1
-  readonly property real barContentWidth: barRow ? barRow.implicitWidth : 0
-  property Item barRow: null
+  readonly property real barContentWidth: barContentRow.implicitWidth
 
   // Show a choice straight away; the next stats sample then confirms the saved value.
   function setPreference(key, value, argument) {
@@ -179,57 +178,54 @@ Panel {
     anchors.fill: parent
     bar: root.bar
     text: " "
-    iconComponent: vertical ? null : barContent
     slotSize: vertical ? Style.bar.iconSlot : root.barContentWidth + Style.space(14)
     tooltipText: ""
     onPressed: root.toggle()
-  }
 
-  Component {
-    id: barContent
-    Item {
+    // Drawn as a direct child: BarIconButton scales iconComponent content down
+    // until its longest side fits one icon, which shrinks a row of stats to specks.
+    Row {
+      id: barContentRow
+      visible: !button.vertical
+      scale: button.pressScale
+      anchors.centerIn: parent
+      spacing: Style.space(6)
+
+      BarStat { visible: !root.supported; label: ""; value: "ASUS ONLY" }
+      LogoMark {
+        visible: root.barHas("logo")
+        anchors.verticalCenter: parent.verticalCenter
+        height: Style.bar.iconCanvas * 0.92
+        width: height * 2
+      }
+      BarStat { visible: root.barHas("cpu"); label: "CPU"; value: Math.round(root.stats.cpu || 0) + "%"; alert: (root.stats.cpu || 0) >= 90 }
+      BarStat { visible: root.barHas("cpuTemp"); label: root.barHas("cpu") ? "" : "CPU"; value: root.fixed(root.stats.cpuTemp, 0, "°"); alert: (root.stats.cpuTemp || 0) >= 90 }
       Row {
-        id: barContentRow
-        anchors.centerIn: parent
-        spacing: Style.space(6)
-        Component.onCompleted: root.barRow = barContentRow
-
-        BarStat { visible: !root.supported; label: ""; value: "ASUS ONLY" }
-        LogoMark {
-          visible: root.barHas("logo")
-          anchors.verticalCenter: parent.verticalCenter
-          height: Style.bar.iconCanvas * 0.92
-          width: height * 2
-        }
-        BarStat { visible: root.barHas("cpu"); label: "CPU"; value: Math.round(root.stats.cpu || 0) + "%"; alert: (root.stats.cpu || 0) >= 90 }
-        BarStat { visible: root.barHas("cpuTemp"); label: root.barHas("cpu") ? "" : "CPU"; value: root.fixed(root.stats.cpuTemp, 0, "°"); alert: (root.stats.cpuTemp || 0) >= 90 }
-        Row {
-          visible: root.barHas("cores")
-          anchors.verticalCenter: parent.verticalCenter
-          spacing: 1
-          Repeater {
-            model: root.coreCount
-            delegate: Item {
-              required property int index
-              width: Math.max(2, Style.space(3))
-              height: Style.bar.iconCanvas * 0.9
-              Rectangle { anchors.fill: parent; color: root.rogRed; opacity: 0.18 }
-              Rectangle {
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                height: Math.max(1, parent.height * root.ratio(root.cores[parent.index], 100))
-                color: root.rogRed
-              }
+        visible: root.barHas("cores")
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: 1
+        Repeater {
+          model: root.coreCount
+          delegate: Item {
+            required property int index
+            width: Math.max(2, Style.space(3))
+            height: Style.bar.iconCanvas * 0.9
+            Rectangle { anchors.fill: parent; color: root.rogRed; opacity: 0.18 }
+            Rectangle {
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.bottom: parent.bottom
+              height: Math.max(1, parent.height * root.ratio(root.cores[parent.index], 100))
+              color: root.rogRed
             }
           }
         }
-        BarDivider { visible: root.barCpuGroup && (root.barHas("ram") || root.barGpuGroup) }
-        BarStat { visible: root.barHas("ram"); label: "RAM"; value: root.fixed(root.ram.used, 1, "G"); alert: root.ratio(root.ram.used, root.ram.total) >= 0.9 }
-        BarDivider { visible: root.barHas("ram") && root.barGpuGroup }
-        BarStat { visible: !!root.gpu && root.barHas("gpu"); label: "GPU"; value: root.gpu ? Math.round(root.gpu.power || 0) + "W" : "—"; alert: !!root.gpu && (root.gpu.temp || 0) >= 87 }
-        BarStat { visible: !!root.gpu && root.barHas("gpuTemp"); label: root.barHas("gpu") ? "" : "GPU"; value: root.gpu ? root.fixed(root.gpu.temp, 0, "°") : "—"; alert: !!root.gpu && (root.gpu.temp || 0) >= 87 }
       }
+      BarDivider { visible: root.barCpuGroup && (root.barHas("ram") || root.barGpuGroup) }
+      BarStat { visible: root.barHas("ram"); label: "RAM"; value: root.fixed(root.ram.used, 1, "G"); alert: root.ratio(root.ram.used, root.ram.total) >= 0.9 }
+      BarDivider { visible: root.barHas("ram") && root.barGpuGroup }
+      BarStat { visible: !!root.gpu && root.barHas("gpu"); label: "GPU"; value: root.gpu ? Math.round(root.gpu.power || 0) + "W" : "—"; alert: !!root.gpu && (root.gpu.temp || 0) >= 87 }
+      BarStat { visible: !!root.gpu && root.barHas("gpuTemp"); label: root.barHas("gpu") ? "" : "GPU"; value: root.gpu ? root.fixed(root.gpu.temp, 0, "°") : "—"; alert: !!root.gpu && (root.gpu.temp || 0) >= 87 }
     }
   }
 
@@ -654,6 +650,8 @@ Panel {
                 anchors.right: topValue.left
                 anchors.rightMargin: Style.space(8)
                 anchors.verticalCenter: parent.verticalCenter
+                // Any process can choose its name, so never treat it as markup.
+                textFormat: Text.PlainText
                 text: parent.row ? parent.row.name : ""
                 elide: Text.ElideRight
                 color: root.textColor
