@@ -28,7 +28,7 @@ With `asusctl` installed, the panel also controls:
 
 Open the panel and choose **CUSTOMIZE**:
 
-- **System color:** presets, a hue strip or any hex value. The whole panel, the bar labels and the logo follow it.
+- **System color:** presets, a hue strip or any hex value (type it with the keyboard, Enter to apply). The whole panel, the bar labels and the logo follow it.
 - **Keyboard color:** the same picker, for any colour your keyboard supports (needs `asusctl`)
 - **Show in bar:** any mix of logo, CPU load, CPU temperature, per-core bars, RAM, GPU power and GPU temperature
 
@@ -74,6 +74,10 @@ Add these to the widget's entry in `~/.config/omarchy/shell.json` to use your ow
 ```
 
 The logo takes the system colour by default. Set `logoTint` to `false` for a multi-colour image.
+
+For a quiet, monochrome bar, add `"barStyle": "plain"`. The bar then shows only the temperatures, as `58° / 45°` (CPU / GPU), in the bar's own text colour, with no logo, labels or accent colour. A value over its alarm limit (CPU 90 °C, GPU 87 °C) switches to the bar's urgent colour.
+
+The CPU temperature in the bar is an average of the last 5 seconds, sampled twice a second. Ryzen laptop CPUs swing by tens of degrees within seconds, so a single reading every few seconds jumped around. The panel still shows the instant value.
 
 ## Keep the keyboard colour after theme changes
 

@@ -75,7 +75,19 @@ Panel {
   readonly property bool hasAsus: stats.hasAsus === true
   readonly property bool hasChargeLimit: hasAsus && stats.batteryLimit !== undefined && stats.batteryLimit !== null
   readonly property bool boostOn: !!gpu && gpu.limit > gpu.defaultLimit + 1
-  readonly property real barContentWidth: barContentRow.implicitWidth
+  // Optional shell.json widget setting `"barStyle": "plain"`: one quiet line of
+  // temperatures in the bar's own color (no logo, labels or accent), e.g. for
+  // bars with a monochrome look. Values over their alarm limit use bar.urgent.
+  readonly property bool plainBar: String(setting("barStyle", "")) === "plain"
+  // The bar shows the CPU temperature averaged over the last 5 s (stats.py
+  // cpuTempAvg); Tctl swings tens of degrees within seconds. The panel keeps
+  // the instant reading.
+  readonly property var barCpuTemp: stats.cpuTempAvg !== undefined && stats.cpuTempAvg !== null ? stats.cpuTempAvg : stats.cpuTemp
+  readonly property bool cpuHot: (barCpuTemp || 0) >= 90
+  readonly property bool gpuHot: !!gpu && (gpu.temp || 0) >= 87
+  readonly property color plainColor: root.bar && root.bar.barForeground ? root.bar.barForeground : textColor
+  readonly property color plainAlert: root.bar && root.bar.urgent ? root.bar.urgent : rogRed
+  readonly property real barContentWidth: plainBar ? plainBarRow.implicitWidth : barContentRow.implicitWidth
 
   // Show a choice straight away; the next stats sample then confirms the saved value.
   function setPreference(key, value, argument) {
@@ -185,8 +197,33 @@ Panel {
     // Drawn as a direct child: BarIconButton scales iconComponent content down
     // until its longest side fits one icon, which shrinks a row of stats to specks.
     Row {
+      id: plainBarRow
+      visible: !button.vertical && root.plainBar
+      scale: button.pressScale
+      anchors.centerIn: parent
+      spacing: 0
+
+      Text {
+        textFormat: Text.PlainText
+        text: root.fixed(root.barCpuTemp, 0, "°")
+        color: root.cpuHot ? root.plainAlert : root.plainColor
+        font.family: root.fontFamily
+        font.pixelSize: Math.round(Style.bar.iconFont * 0.8)
+      }
+      Text {
+        visible: !!root.gpu
+        textFormat: Text.PlainText
+        text: " / " + (root.gpu ? root.fixed(root.gpu.temp, 0, "°") : "")
+        color: root.gpuHot ? root.plainAlert : root.plainColor
+        opacity: root.gpuHot ? 1 : 0.55
+        font.family: root.fontFamily
+        font.pixelSize: Math.round(Style.bar.iconFont * 0.8)
+      }
+    }
+
+    Row {
       id: barContentRow
-      visible: !button.vertical
+      visible: !button.vertical && !root.plainBar
       scale: button.pressScale
       anchors.centerIn: parent
       spacing: Style.space(6)
@@ -199,7 +236,7 @@ Panel {
         width: height * 2
       }
       BarStat { visible: root.barHas("cpu"); label: "CPU"; value: Math.round(root.stats.cpu || 0) + "%"; alert: (root.stats.cpu || 0) >= 90 }
-      BarStat { visible: root.barHas("cpuTemp"); label: root.barHas("cpu") ? "" : "CPU"; value: root.fixed(root.stats.cpuTemp, 0, "°"); alert: (root.stats.cpuTemp || 0) >= 90 }
+      BarStat { visible: root.barHas("cpuTemp"); label: root.barHas("cpu") ? "" : "CPU"; value: root.fixed(root.barCpuTemp, 0, "°"); alert: root.cpuHot }
       Row {
         visible: root.barHas("cores")
         anchors.verticalCenter: parent.verticalCenter
@@ -856,7 +893,6 @@ Panel {
     spacing: Style.space(6)
     onCurrentChanged: {
       draft = "#" + current
-      if (!hexField.activeFocus) hexField.text = "#" + current
     }
 
     Row {
@@ -918,22 +954,56 @@ Panel {
           onReleased: picker.picked(String(picker.draft).slice(1, 7))
         }
       }
-      TextField {
+      // Hex entry driven by keys, not an editable text control: Qt's text
+      // controls read the Wayland clipboard on every clipboard change to update
+      // canPaste, so an oversized or slow clipboard owner could stall the shared
+      // shell while the picker is open. This entry never touches the clipboard.
+      FocusScope {
         id: hexField
         anchors.verticalCenter: parent.verticalCenter
         width: Style.space(110)
-        text: "#" + picker.current
-        maximumLength: 7
-        foreground: root.textColor
-        accent: root.rogRed
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.bodySmall
-        validator: RegularExpressionValidator { regularExpression: /^#?[0-9a-fA-F]{0,6}$/ }
-        onActiveFocusChanged: root.hexFieldFocused = activeFocus
-        onAccepted: {
-          var hex = text.replace("#", "").toLowerCase()
-          if (hex.length === 6) picker.picked(hex)
-          root.forceActiveFocus()
+        height: Style.space(30)
+        property string draft: ""
+
+        onActiveFocusChanged: {
+          root.hexFieldFocused = activeFocus
+          draft = activeFocus ? picker.current : ""
+        }
+
+        Rectangle {
+          anchors.fill: parent
+          radius: Style.space(4)
+          color: "transparent"
+          border.width: 1
+          border.color: hexField.activeFocus ? root.rogRed : Qt.alpha(root.textColor, 0.25)
+        }
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          x: Style.space(10)
+          textFormat: Text.PlainText
+          text: "#" + (hexField.activeFocus ? hexField.draft + "\u258f" : picker.current)
+          color: root.textColor
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+        MouseArea {
+          anchors.fill: parent
+          cursorShape: Qt.IBeamCursor
+          onClicked: hexField.forceActiveFocus()
+        }
+
+        Keys.onPressed: function(event) {
+          if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+            if (draft.length === 6) picker.picked(draft)
+            root.forceActiveFocus()
+          } else if (event.key === Qt.Key_Escape) {
+            root.forceActiveFocus()
+          } else if (event.key === Qt.Key_Backspace) {
+            draft = draft.slice(0, -1)
+          } else if (/^[0-9a-fA-F]$/.test(event.text) && draft.length < 6) {
+            draft += event.text.toLowerCase()
+          }
+          event.accepted = true
         }
       }
     }

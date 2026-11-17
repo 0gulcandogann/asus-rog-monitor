@@ -40,6 +40,29 @@ def milli(path):
     return None if value is None else value / 1000
 
 
+class TempWindow:
+    """Average of the readings from the last `span` seconds.
+
+    Tctl on these Ryzen laptops swings 45 -> 95 C within seconds; a single
+    sample every few seconds made the bar number jump. The bar shows this
+    average; the detailed panel keeps the instant value.
+    """
+
+    def __init__(self, span):
+        self.span = span
+        self.samples = []
+
+    def add(self, now, value):
+        if value is not None:
+            self.samples.append((now, value))
+        self.samples = [(t, v) for t, v in self.samples if now - t <= self.span]
+
+    def mean(self):
+        if not self.samples:
+            return None
+        return sum(v for _, v in self.samples) / len(self.samples)
+
+
 def cpu_times():
     times = []
     with open("/proc/stat") as f:
@@ -203,6 +226,8 @@ class DriverStatus:
     """NVIDIA driver version, and whether pacman has a newer one. Checks at most every six hours."""
 
     MAX_AGE = 6 * 3600
+    # A failed check, usually from running before the network is up, should not count for six hours.
+    RETRY_AGE = 15 * 60
     PACKAGES = ("nvidia-utils", "nvidia-open-dkms", "nvidia-dkms", "nvidia")
 
     def __init__(self):
@@ -218,6 +243,12 @@ class DriverStatus:
         except (OSError, ValueError):
             return None
 
+    def is_fresh(self, cache):
+        if not cache:
+            return False
+        limit = self.MAX_AGE if cache.get("ok") else self.RETRY_AGE
+        return time.time() - cache.get("checked", 0) < limit
+
     def check(self):
         # One panel per monitor runs this, so a lock keeps the check and notification single.
         os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
@@ -227,7 +258,7 @@ class DriverStatus:
             except OSError:
                 return
             previous = self.load() or {}
-            if time.time() - previous.get("checked", 0) < self.MAX_AGE:
+            if self.is_fresh(previous):
                 return
             result = {"checked": time.time(), "available": None, "ok": False, "notified": previous.get("notified")}
             try:
@@ -272,19 +303,22 @@ class DriverStatus:
         if not loaded:
             return None
         cache = self.load()
-        fresh = cache is not None and time.time() - cache.get("checked", 0) < self.MAX_AGE
         running = self.worker is not None and self.worker.is_alive()
-        if not fresh and not running and shutil.which("checkupdates"):
+        if not self.is_fresh(cache) and not running and shutil.which("checkupdates"):
             self.worker = threading.Thread(target=self.check, daemon=True)
             self.worker.start()
         installed = self.installed_version()
+        # The cache can still name a version that has since been installed.
+        available = (cache or {}).get("available")
+        if available == installed:
+            available = None
         if installed and installed != loaded:
             state = "restart"
         elif cache and cache.get("ok"):
-            state = "update" if cache.get("available") else "current"
+            state = "update" if available else "current"
         else:
             state = "unknown"
-        return {"version": loaded, "state": state, "available": (cache or {}).get("available")}
+        return {"version": loaded, "state": state, "available": available}
 
 
 def preferences():
@@ -338,6 +372,7 @@ def main():
         processes.snapshot()
     interval = max(0.5, float(sys.argv[1])) if len(sys.argv) > 1 else 3.0
     before = cpu_times()
+    cpu_temp_window = TempWindow(5.0)
     time.sleep(0.25)
     while True:
         after = cpu_times()
@@ -351,6 +386,7 @@ def main():
             "cpu": cores[0] if cores else 0,
             "cores": cores[1:],
             "cpuTemp": milli(k10 + "/temp1_input") if k10 else None,
+            "cpuTempAvg": None,
             "cpuGhz": average,
             "cpuPeakGhz": peak,
             "load": read("/proc/loadavg").split()[:3],
@@ -364,6 +400,8 @@ def main():
             "hasAsus": HAS_ASUS,
             "model": MODEL,
         }
+        cpu_temp_window.add(time.monotonic(), stats["cpuTemp"])
+        stats["cpuTempAvg"] = cpu_temp_window.mean()
         stats["prefs"] = preferences()
         stats["driver"] = driver.snapshot()
         if processes:
@@ -373,7 +411,16 @@ def main():
             print(json.dumps(stats), flush=True)
         except BrokenPipeError:
             os._exit(0)
-        time.sleep(interval)
+        # Sample the CPU temperature twice a second between reports so the
+        # average covers the whole span, not one reading per report.
+        deadline = time.monotonic() + interval
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            time.sleep(min(0.5, left))
+            if k10:
+                cpu_temp_window.add(time.monotonic(), milli(k10 + "/temp1_input"))
 
 
 if __name__ == "__main__":
