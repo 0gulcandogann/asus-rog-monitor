@@ -39,6 +39,50 @@ class TempWindowTest(unittest.TestCase):
         self.assertEqual(w.mean(), 60)
 
 
+class CpuTempPathTest(unittest.TestCase):
+    """AMD laptops expose k10temp; Intel ones (e.g. Zephyrus M16 GU604) only coretemp."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.sensors = {}
+        original = stats.hwmon
+        stats.hwmon = lambda name: self.sensors.get(name)
+        self.addCleanup(setattr, stats, "hwmon", original)
+
+    def sensor(self, name, files):
+        path = os.path.join(self.tmp.name, name)
+        os.makedirs(path)
+        for file, text in files.items():
+            with open(os.path.join(path, file), "w") as f:
+                f.write(text + "\n")
+        self.sensors[name] = path
+        return path
+
+    def test_prefers_k10temp(self):
+        k10 = self.sensor("k10temp", {"temp1_input": "55000"})
+        self.sensor("coretemp", {"temp1_input": "70000", "temp1_label": "Package id 0"})
+        self.assertEqual(stats.cpu_temp_path(), k10 + "/temp1_input")
+
+    def test_intel_uses_package_sensor(self):
+        core = self.sensor("coretemp", {
+            "temp2_input": "58000", "temp2_label": "Core 0",
+            "temp1_input": "61000", "temp1_label": "Package id 0",
+        })
+        path = stats.cpu_temp_path()
+        self.assertEqual(path, core + "/temp1_input")
+        self.assertEqual(stats.milli(path), 61.0)
+
+    def test_intel_without_labels_falls_back_to_temp1(self):
+        core = self.sensor("coretemp", {"temp1_input": "61000"})
+        self.assertEqual(stats.cpu_temp_path(), core + "/temp1_input")
+
+    def test_no_cpu_sensor(self):
+        self.assertIsNone(stats.cpu_temp_path())
+        self.assertIsNone(stats.milli(stats.cpu_temp_path()))
+
+
 if __name__ == "__main__":
     unittest.main()
 
