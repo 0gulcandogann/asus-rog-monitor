@@ -35,6 +35,20 @@ def hwmon(name):
     return None
 
 
+def cpu_temp_path():
+    """Package temperature input: AMD k10temp (Tctl), else Intel coretemp (Package id 0)."""
+    k10 = hwmon("k10temp")
+    if k10:
+        return k10 + "/temp1_input"
+    core = hwmon("coretemp")
+    if core:
+        for label in sorted(glob.glob(core + "/temp*_label")):
+            if read(label).startswith("Package id"):
+                return label[: -len("_label")] + "_input"
+        return core + "/temp1_input"
+    return None
+
+
 def milli(path):
     value = number(read(path)) if path else None
     return None if value is None else value / 1000
@@ -378,14 +392,14 @@ def main():
         after = cpu_times()
         cores = usage(before, after)
         before = after
-        k10 = hwmon("k10temp")
+        cpu_temp = cpu_temp_path()
         asus = hwmon("asus")
         nvme = hwmon("nvme")
         average, peak = cpu_frequency()
         stats = {
             "cpu": cores[0] if cores else 0,
             "cores": cores[1:],
-            "cpuTemp": milli(k10 + "/temp1_input") if k10 else None,
+            "cpuTemp": milli(cpu_temp),
             "cpuTempAvg": None,
             "cpuGhz": average,
             "cpuPeakGhz": peak,
@@ -419,8 +433,8 @@ def main():
             if left <= 0:
                 break
             time.sleep(min(0.5, left))
-            if k10:
-                cpu_temp_window.add(time.monotonic(), milli(k10 + "/temp1_input"))
+            if cpu_temp:
+                cpu_temp_window.add(time.monotonic(), milli(cpu_temp))
 
 
 if __name__ == "__main__":
