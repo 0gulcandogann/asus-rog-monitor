@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.0gulcandogann.asus-rog-monitor",
   "name": "ASUS ROG Monitor",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "0gulcandogann",
   "license": "MIT",
   "description": "Customizable dashboard for ASUS and ROG laptops: CPU cores, RAM, GPU power, live graphs, top apps, and keyboard, fan, battery and profile controls",

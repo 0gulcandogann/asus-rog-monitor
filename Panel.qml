@@ -58,6 +58,8 @@ Panel {
 
   property string topMode: "cpu"
   property string confirmKillName: ""
+  // PIDs shown at the first click; only these may be signalled on confirm.
+  property var confirmKillPids: []
   property var history: []
   property int historyRevision: 0
 
@@ -133,11 +135,18 @@ Panel {
   function requestKill(row) {
     if (confirmKillName !== row.name) {
       confirmKillName = row.name
+      confirmKillPids = row.pids.slice()
       killConfirmTimer.restart()
       return
     }
+    // Only PIDs present at the first click AND still in this group now, so a
+    // process that joined the group (or reused a PID) in between is never hit.
+    var current = row.pids
+    var targets = confirmKillPids.filter(function (pid) { return current.indexOf(pid) >= 0 })
     confirmKillName = ""
-    killProc.exec(["kill"].concat(row.pids.map(String)))
+    confirmKillPids = []
+    if (targets.length > 0)
+      killProc.exec(["kill"].concat(targets.map(String)))
   }
   function coreColor(load) {
     return Qt.tint(root.rogRedDim, Qt.rgba(root.rogRed.r, root.rogRed.g, root.rogRed.b, ratio(load, 100)))
@@ -180,7 +189,7 @@ Panel {
     restartTimer.restart()
   }
   Timer { id: restartTimer; interval: 50; onTriggered: statsProc.running = true }
-  Timer { id: killConfirmTimer; interval: 3000; onTriggered: root.confirmKillName = "" }
+  Timer { id: killConfirmTimer; interval: 3000; onTriggered: { root.confirmKillName = ""; root.confirmKillPids = [] } }
   Process { id: profileProc }
   Process { id: actionProc }
   Process { id: killProc }

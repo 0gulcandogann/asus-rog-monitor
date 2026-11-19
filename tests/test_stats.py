@@ -39,9 +39,6 @@ class TempWindowTest(unittest.TestCase):
         self.assertEqual(w.mean(), 60)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class NoEditableTextControlsTest(unittest.TestCase):
     """Qt's editable text controls probe the Wayland clipboard on every
@@ -58,3 +55,38 @@ class NoEditableTextControlsTest(unittest.TestCase):
                 source = f.read()
             found = re.findall(r"^\s*(TextField|TextInput|TextEdit|TextArea)\s*\{", source, re.M)
             self.assertEqual(found, [], name)
+
+
+class ThemeHookQuotingTest(unittest.TestCase):
+    """The generated hook must treat the plugin path as data (review of 5df53ec)."""
+
+    def test_hostile_path_is_not_executed(self):
+        import shutil, subprocess, tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            evil = os.path.join(tmp, 'x"; touch PWNED; echo "')
+            os.makedirs(evil)
+            shutil.copy(os.path.join(HERE, "..", "install-theme-hook.sh"), evil)
+            with open(os.path.join(evil, "actions.py"), "w") as f:
+                f.write("import sys\nprint(sys.argv[1:])\n")
+            home = os.path.join(tmp, "home")
+            os.makedirs(home)
+            env = dict(os.environ, HOME=home)
+            subprocess.run(["bash", os.path.join(evil, "install-theme-hook.sh")], check=True, env=env, cwd=tmp, capture_output=True)
+            hook = os.path.join(home, ".config/omarchy/hooks/theme-set.d/asus-rog-monitor-keyboard")
+            out = subprocess.run(["bash", hook], env=env, cwd=tmp, capture_output=True, text=True)
+            self.assertEqual(out.stdout.strip(), "['keyboard-reapply']")
+            self.assertFalse(os.path.exists(os.path.join(tmp, "PWNED")))
+
+
+class KillConfirmationTest(unittest.TestCase):
+    """Confirming Close must only signal PIDs captured at the first click."""
+
+    def test_panel_freezes_pids(self):
+        with open(os.path.join(HERE, "..", "Panel.qml")) as f:
+            source = f.read()
+        self.assertIn("confirmKillPids = row.pids.slice()", source)
+        self.assertNotIn('killProc.exec(["kill"].concat(row.pids', source)
+
+
+if __name__ == "__main__":
+    unittest.main()

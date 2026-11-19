@@ -6,6 +6,7 @@ set -euo pipefail
 plugin="$(cd "$(dirname "$0")" && pwd)"
 hook="$HOME/.config/omarchy/hooks/theme-set.d/asus-rog-monitor-keyboard"
 mkdir -p "$(dirname "$hook")"
-printf '#!/bin/bash\nexec python3 -I "%s/actions.py" keyboard-reapply\n' "$plugin" > "$hook"
+# %q shell-quotes the path, so a checkout path with shell syntax stays data.
+printf '#!/bin/bash\nexec python3 -I %q keyboard-reapply\n' "$plugin/actions.py" > "$hook"
 chmod +x "$hook"
 echo "Installed $hook"
