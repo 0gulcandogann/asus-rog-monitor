@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -158,26 +159,42 @@ class Processes:
                 continue
             name = stat[stat.find("(") + 1:stat.rfind(")")]
             fields = stat[stat.rfind(")") + 2:].split()
-            rows[int(entry.name)] = (name, int(fields[11]) + int(fields[12]), resident * PAGE_SIZE, owner)
+            # fields[19] is the start time: with the PID it identifies one process for good.
+            rows[int(entry.name)] = (name, int(fields[11]) + int(fields[12]), resident * PAGE_SIZE, owner, fields[19])
         return rows
+
+    GPU_JOB_LIMIT = 5.0
 
     def poll_gpu(self):
         # pmon takes about a second, so it runs beside the sampler and is collected later.
-        if self.gpu_job and self.gpu_job.poll() is not None:
-            rows = []
-            for line in self.gpu_job.stdout.read().splitlines():
-                parts = line.split()
-                if line.startswith("#") or len(parts) < 11 or not parts[1].isdigit():
-                    continue
-                rows.append((int(parts[1]), number(parts[3]) or 0, number(parts[9]) or 0))
-            self.gpu_rows = rows
-            self.gpu_job = None
+        # Its output goes to a temporary file, never a pipe, so it cannot fill up and block it,
+        # and a job that runs past the limit is killed so sampling always restarts.
+        if self.gpu_job:
+            job, output, started = self.gpu_job
+            if job.poll() is not None:
+                output.seek(0)
+                rows = []
+                for line in output.read().splitlines():
+                    parts = line.split()
+                    if line.startswith("#") or len(parts) < 11 or not parts[1].isdigit():
+                        continue
+                    rows.append((int(parts[1]), number(parts[3]) or 0, number(parts[9]) or 0))
+                self.gpu_rows = rows
+                output.close()
+                self.gpu_job = None
+            elif time.monotonic() - started > self.GPU_JOB_LIMIT:
+                job.kill()
+                job.wait()
+                output.close()
+                self.gpu_job = None
         if self.gpu_job is None and self.cycles % 5 == 0:
             try:
-                self.gpu_job = subprocess.Popen(
+                output = tempfile.TemporaryFile(mode="w+")
+                job = subprocess.Popen(
                     ["nvidia-smi", "pmon", "-c", "1", "-s", "um"],
-                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                    stdout=output, stderr=subprocess.DEVNULL, text=True,
                 )
+                self.gpu_job = (job, output, time.monotonic())
             except OSError:
                 self.gpu_job = None
         self.cycles += 1
@@ -188,13 +205,13 @@ class Processes:
         rows = self.scan()
         uid = os.getuid()
         groups = {}
-        for pid, (name, ticks, resident, owner) in rows.items():
+        for pid, (name, ticks, resident, owner, started) in rows.items():
             group = groups.setdefault(name, {"name": name, "cpu": 0.0, "ram": 0, "pids": [], "own": True})
             earlier = self.previous.get(pid)
             if earlier:
                 group["cpu"] += max(0, ticks - earlier[1]) / CLOCK_TICKS / elapsed / CPU_COUNT * 100
             group["ram"] += resident
-            group["pids"].append(pid)
+            group["pids"].append(f"{pid}:{started}")
             group["own"] = group["own"] and owner == uid
         self.previous = rows
         self.previous_time = now

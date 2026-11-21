@@ -6,10 +6,12 @@ keyboard-reapply                             apply the remembered effect again
 fan <AUTO|COOL|MAX>                          set the active profile's fan curve
 system-color <rrggbb>                        set the colour of the panel, bar and logo
 bar-items <item,item,...>                    choose what the bar shows
+close <pid:start> ...                        ask those exact processes to quit
 """
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 
@@ -101,6 +103,40 @@ def save_preference(key, value):
     save_state(state)
 
 
+def start_time(pid):
+    """Start time of a process (field 22 of /proc/<pid>/stat), or None if it is gone."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            stat = f.read()
+    except OSError:
+        return None
+    return stat[stat.rfind(")") + 2:].split()[19]
+
+
+def close(*targets):
+    """Send SIGTERM to processes named as pid:start, only if they are still exactly those processes.
+
+    A pidfd refers to one process for good, so once the start time matches there is no window
+    in which a recycled PID could receive the signal."""
+    for target in targets:
+        pid, _, started = target.partition(":")
+        if not (pid.isdigit() and started.isdigit()):
+            raise SystemExit("invalid target: " + target)
+        try:
+            fd = os.pidfd_open(int(pid))
+        except OSError:
+            continue
+        try:
+            # Checked after the pidfd is open: from here on the pidfd cannot point at a newer process.
+            if start_time(pid) != started or os.stat(f"/proc/{pid}").st_uid != os.getuid():
+                continue
+            signal.pidfd_send_signal(fd, signal.SIGTERM)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+
+
 def is_asus_system():
     for name in ("sys_vendor", "board_vendor"):
         try:
@@ -120,6 +156,8 @@ def main():
         keyboard(*args)
     elif command == "keyboard-reapply":
         keyboard_reapply()
+    elif command == "close":
+        close(*args)
     elif command == "fan":
         fan(*args)
     elif command == "system-color":

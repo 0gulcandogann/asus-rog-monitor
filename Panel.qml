@@ -146,7 +146,7 @@ Panel {
     confirmKillName = ""
     confirmKillPids = []
     if (targets.length > 0)
-      killProc.exec(["kill"].concat(targets.map(String)))
+      killProc.exec(["python3", "-I", root.actionsScript, "close"].concat(targets))
   }
   function coreColor(load) {
     return Qt.tint(root.rogRedDim, Qt.rgba(root.rogRed.r, root.rogRed.g, root.rogRed.b, ratio(load, 100)))
